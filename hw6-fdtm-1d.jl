@@ -1,72 +1,81 @@
 using Plots
 gr()
 
-# Parameters
-N = 120
-H = zeros(N)
-E = zeros(N)
-E_old = E
+# --------------------------------------------------------------------------- #
+# Physical constants
+# --------------------------------------------------------------------------- #
+μ0 = 4π * 1e-7      # H/m
+ϵ0 = 8.85e-12      # F/m
+c  = 3e8           # m/s
 
-μ = 4*pi*1e-7      # H/m
-ϵ = 8.85e-12       # F/m
+# --------------------------------------------------------------------------- #
+# Simulation parameters
+# --------------------------------------------------------------------------- #
+f = 2e9            # source frequency, Hz
+λ = c / f          # wavelength in air, m
+N = 120            # number of E nodes
+dx = λ / 20        # grid spacing, m
+dt = dx / (2c)     # time step (Courant)
 
+# --------------------------------------------------------------------------- #
+# Material: air → quarter-wave transformer → medium
+# --------------------------------------------------------------------------- #
+ϵr_medium = 4.0
+ϵr_qTX    = sqrt(ϵr_medium)           # impedance match: η_tx = √(η₀ η_medium)
+λ_qTX     = λ / sqrt(ϵr_qTX)          # wavelength in transformer
+n_cells_qtx = max(1, round(Int, (λ_qTX/4) / dx))
+layer_start  = 75
+layer_end_qtx = layer_start + n_cells_qtx - 1
 
-c = 3e8             # m/s
-f = 2e9
-λ = c/f
-
-dx = λ/20          # m
-
-dt = dx/(2*c)
-#dt = dx / c
-
-# Create animation
-anim = @animate for iter in 1:1000
-
-    # Save old E
-    E_old .= E
-
-    for x in 1:N-1
-        H[x] += dt/(μ*dx)*(E[x] - E[x+1])
-    end
-
-    # Update E
-    for x in 2:N
-        E[x] += dt/(ϵ*dx)*(H[x-1] - H[x])
-    end
-
-    # Add soft source
-    E[Int(N/2)] = E[Int(N/2)] + sin(iter*dt*2*pi*f)
-
-
-    # Mur ABCs
-    coef = (c*dt - dx) / (c*dt + dx)
-
-    E[1] = E_old[2]     + coef * (E[2]     - E_old[1])
-    E[N] = E_old[N-1]   + coef * (E[N-1]   - E_old[N])
-
-
-
-
-    # Plot E for this frame
-    # p = plot(1:N, zeros(N), E, ylim=(-5,5), zlim=(-5,5), xlim=(1,N), title="E field at t=$(round(iter*dt*1e9, digits=2)) ns",
-    #      xlabel="x", ylabel="E", legend=false)
-    
-    # plot!(1:N, 377 .* H, zeros(N),
-    #       lw=2, label="H")
-    p = plot(
-    1:N, E,
-    ylim=(-5,5),
-    xlim=(1,N),
-    lw=2,
-    label="E",
-    title="Fields at t=$(round(iter*dt*1e9, digits=2)) ns",
-    xlabel="x",
-    ylabel="Field amplitude"
-)
-
-
+ϵ = fill(ϵ0, N)
+for i in layer_start:N
+    ϵ[i] = ϵr_medium * ϵ0
+end
+for i in layer_start:layer_end_qtx
+    ϵ[i] = ϵr_qTX * ϵ0
 end
 
-# Save as GIF
+# --------------------------------------------------------------------------- #
+# Fields and Mur BC coefficients
+# --------------------------------------------------------------------------- #
+H = zeros(N)
+E = zeros(N)
+E_old = zeros(N)
+
+v_medium   = c / sqrt(ϵr_medium)
+coef_left  = (c*dt - dx) / (c*dt + dx)
+coef_right = (v_medium*dt - dx) / (v_medium*dt + dx)
+
+# --------------------------------------------------------------------------- #
+# Time stepping and animation
+# --------------------------------------------------------------------------- #
+anim = @animate for iter in 1:1000
+    E_old .= E
+
+    # H update
+    for x in 1:N-1
+        H[x] += (dt / (μ0*dx)) * (E[x] - E[x+1])
+    end
+
+    # E update
+    for x in 2:N
+        E[x] += (dt / (ϵ[x]*dx)) * (H[x-1] - H[x])
+    end
+
+    # Soft source
+    E[Int(N/2)] += sin(iter * dt * 2π * f)
+
+    # Mur ABCs
+    E[1] = E_old[2]   + coef_left  * (E[2]   - E_old[1])
+    E[N] = E_old[N-1] + coef_right * (E[N-1] - E_old[N])
+
+    # Plot
+    plot(1:N, E;
+        xlim=(1, N), ylim=(-5, 5), lw=2, label="E",
+        title="Fields at t=$(round(iter*dt*1e9, digits=2)) ns",
+        xlabel="x", ylabel="Field amplitude")
+    vline!([layer_start],      color=:gray, ls=:dash, label="tx start")
+    vline!([layer_end_qtx+1],  color=:gray, ls=:dash, label="tx end")
+end
+
 gif(anim, "E_wave.gif", fps=20)
